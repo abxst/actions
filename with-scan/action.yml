@@ -43,9 +43,6 @@ inputs:
   gate-ignore-unfixed:
     required: false
     default: 'true'
-  trivy-version:
-    required: false
-    default: 'v0.36.0'
 
 outputs:
   image-tags:
@@ -96,7 +93,7 @@ runs:
         cache-to: type=gha,mode=max
 
     - name: Trivy scan (informational, full)
-      uses: aquasecurity/trivy-action@${{ inputs.trivy-version }}
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: ${{ steps.lc.outputs.name }}:scan
         format: table
@@ -106,7 +103,7 @@ runs:
         severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
     - name: Trivy scan (hard gate)
-      uses: aquasecurity/trivy-action@${{ inputs.trivy-version }}
+      uses: aquasecurity/trivy-action@v0.36.0
       with:
         image-ref: ${{ steps.lc.outputs.name }}:scan
         format: table
