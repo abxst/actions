@@ -3,7 +3,7 @@
 > Production-ready composite GitHub Actions to build, scan, and publish Docker images to any OCI registry. Ships two variants with explicit security trade-offs so you pick the right tool for the job.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/abxst/actions)](https://github.com/abxst/actions/releases)
+[![GitHub tag](https://img.shields.io/github/v/tag/abxst/actions)](https://github.com/abxst/actions/tag)
 [![GitHub issues](https://img.shields.io/github/issues/abxst/actions)](https://github.com/abxst/actions/issues)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/abxst/actions/pulls)
 
