@@ -1,0 +1,88 @@
+name: 'Docker Publish'
+description: 'Fresh Build and Push Docker image'
+author: 'abxst (Nguyen Hai)'
+
+branding:
+  icon: 'package'
+  color: 'gray'
+
+inputs:
+  registry:
+    required: false
+    default: 'ghcr.io'
+  image-name:
+    required: false
+    default: ${{ github.repository }}
+  context:
+    required: false
+    default: '.'
+  dockerfile:
+    required: false
+    default: './Dockerfile'
+  push:
+    required: false
+    default: 'false'
+  registry-username:
+    required: true
+  registry-password:
+    required: true
+  tags:
+    required: false
+    default: |
+      type=raw,value={{sha}}-{{date 'DDMMYYYY'}},enable={{is_default_branch}}
+      type=raw,value=latest,enable={{is_default_branch}}
+  build-args:
+    required: false
+    default: ''
+  platforms:
+    required: false
+    default: ''
+
+outputs:
+  image-tags:
+    value: ${{ steps.meta.outputs.tags }}
+  image-digest:
+    value: ${{ steps.build.outputs.digest }}
+  image-name-lc:
+    value: ${{ steps.lc.outputs.name }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Lowercase image name
+      id: lc
+      shell: bash
+      env:
+        RAW_NAME: ${{ inputs.image-name }}
+      run: echo "name=${RAW_NAME,,}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.registry-username }}
+        password: ${{ inputs.registry-password }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ inputs.registry }}/${{ steps.lc.outputs.name }}
+        tags: ${{ inputs.tags }}
+
+    - name: Build & push
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: ${{ inputs.build-args }}
+        platforms: ${{ inputs.platforms }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
