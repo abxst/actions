@@ -26,12 +26,12 @@ This repo packages that pattern as two reusable composite actions with a clean, 
 
 ## 1. Choose a variant
 
-| | **with-scan** | **no-scan** |
-|---|---|---|
-| **Path** | `abxst/actions/with-scan@v1` | `abxst/actions/no-scan@v1` |
-| **Trivy hard gate** | Yes (fails on HIGH/CRITICAL CVEs with available fix) | No |
-| **Speed** | ~2-4 min (build twice + scan) | ~1-2 min (build once) |
-| **Use for** | Production-facing images | Internal tools, dev images, images already scanned elsewhere |
+| | **strict** | **semi-strict** | **with-scan** | **no-scan** |
+|---|---|---|---|---|
+| **Path** | `abxst/actions/strict@v2` | `abxst/actions/semi-strict@v2` | `abxst/actions/with-scan@v2` | `abxst/actions/no-scan@v2` |
+| **Trivy hard gate** | Yes (all severities UNKNOWN→CRITICAL, incl. unfixed CVEs) | Yes (all severities UNKNOWN→CRITICAL, unfixed ignored) | Yes (HIGH/CRITICAL with available fix) | No |
+| **Speed** | ~2-4 min (build twice + scan) | ~2-4 min | ~2-4 min | ~1-2 min (build once) |
+| **Use for** | Highest-sensitivity images (payment, auth, PII) | Sensitive images where unfixable CVEs shouldn't block | Production-facing images | Internal tools, dev images, images already scanned elsewhere |
 
 **Rule of thumb**: if your image will run somewhere a user or customer can reach (even indirectly via a production container) → use `with-scan`. Otherwise → `no-scan`.
 
@@ -135,13 +135,12 @@ type=raw,value=latest,enable={{is_default_branch}}
 
 → Produces tags like `abc123f-24052026` and `latest`, but only when pushing to the default branch.
 
-### 3.2. `with-scan` only
+### 3.2. Scanning variants only (`strict`, `semi-strict`, `with-scan`)
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `gate-severity` | no | `HIGH,CRITICAL` | Severity levels that fail the pipeline. Drop `HIGH` to block CRITICAL only. |
-| `gate-ignore-unfixed` | no | `'true'` | Ignore CVEs that have no available fix. Set to `'false'` for extra-sensitive images. |
-| `trivy-version` | no | `v0.36.0` | Version of `aquasecurity/trivy-action` to pin |
+| `gate-severity` | no | `HIGH,CRITICAL` (with-scan) / `UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL` (strict, semi-strict) | Severity levels that fail the pipeline. |
+| `gate-ignore-unfixed` | no | `'true'` (with-scan, semi-strict) / `'false'` (strict) | Ignore CVEs that have no available fix. |
 
 ---
 

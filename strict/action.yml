@@ -1,5 +1,5 @@
-name: 'Docker Publish (with Trivy scan)'
-description: 'Build - Scan - Push Docker image'
+name: 'Docker Publish (strict Trivy gate)'
+description: 'Build - Scan - Push Docker image. Gate on all severities (UNKNOWN to CRITICAL), including unfixed CVEs'
 author: 'abxst (Nguyen Hai)'
 
 branding:
@@ -39,10 +39,10 @@ inputs:
     default: ''
   gate-severity:
     required: false
-    default: 'HIGH,CRITICAL'
+    default: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
   gate-ignore-unfixed:
     required: false
-    default: 'true'
+    default: 'false'
 
 outputs:
   image-tags:
