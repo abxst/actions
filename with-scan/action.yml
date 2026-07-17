@@ -36,7 +36,10 @@ inputs:
     default: ''
   platforms:
     required: false
-    default: ''
+    default: 'linux/amd64'
+  scan-platform:
+    required: false
+    default: 'linux/amd64'
   gate-severity:
     required: false
     default: 'HIGH,CRITICAL'
@@ -61,6 +64,9 @@ runs:
       env:
         RAW_NAME: ${{ inputs.image-name }}
       run: echo "name=${RAW_NAME,,}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -88,7 +94,7 @@ runs:
         tags: ${{ steps.lc.outputs.name }}:scan
         labels: ${{ steps.meta.outputs.labels }}
         build-args: ${{ inputs.build-args }}
-        platforms: ${{ inputs.platforms }}
+        platforms: ${{ inputs.scan-platform }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 

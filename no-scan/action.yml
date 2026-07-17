@@ -36,7 +36,7 @@ inputs:
     default: ''
   platforms:
     required: false
-    default: ''
+    default: 'linux/amd64'
 
 outputs:
   image-tags:
@@ -55,6 +55,9 @@ runs:
       env:
         RAW_NAME: ${{ inputs.image-name }}
       run: echo "name=${RAW_NAME,,}" >> "$GITHUB_OUTPUT"
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
