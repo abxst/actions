@@ -17,7 +17,7 @@ This repo packages that pattern as two reusable composite actions with a clean, 
 - Two-pass Trivy scan: informational full report + hard gate on HIGH/CRITICAL
 - Automatic image-name lowercasing (GHCR requirement)
 - GitHub Actions layer caching out of the box
-- Multi-arch builds (amd64, arm64) by default — QEMU set up automatically
+- Multi-arch builds (amd64, arm64) on demand — QEMU set up automatically, just set `platforms`
 - Customizable tag strategies (sha+date, semver, custom)
 - Build args, custom Dockerfile path, custom build context
 - Two variants sharing the same interface, easy to switch between
@@ -124,7 +124,7 @@ Open a PR into `main`, then check the **Actions** tab. If Trivy fails, read the 
 | `registry-password` | **yes** | — | Registry login token/password |
 | `tags` | no | see below | Tags input for `docker/metadata-action` (multiline) |
 | `build-args` | no | `''` | Build args (multiline `KEY=VALUE`) |
-| `platforms` | no | `linux/amd64,linux/arm64` | Target platforms for the pushed image. Multi-arch by default; QEMU is set up automatically. Set to a single platform (e.g. `linux/amd64`) to build native-only. |
+| `platforms` | no | `linux/amd64` | Target platforms for the pushed image. Single arch by default. Set to a comma-separated list (e.g. `linux/amd64,linux/arm64`) for multi-arch — QEMU is already set up inside the action. |
 
 Default `tags`:
 
@@ -263,8 +263,8 @@ jobs:
 
 ### 5.4. Multi-arch build (amd64 + arm64)
 
-Multi-arch is the **default** — `platforms` is `linux/amd64,linux/arm64` and QEMU is
-set up inside the action, so no extra steps are needed:
+The default is single arch (`linux/amd64`). To build multi-arch, just set
+`platforms` — QEMU is already set up inside the action, so no extra steps are needed:
 
 ```yaml
 steps:
@@ -272,6 +272,7 @@ steps:
   - uses: abxst/actions/with-scan@v1
     with:
       push: true
+      platforms: linux/amd64,linux/arm64
       registry-username: ${{ github.actor }}
       registry-password: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -279,17 +280,8 @@ steps:
 The scanning variants scan a single arch (`scan-platform`, default `linux/amd64`)
 and push the full multi-arch manifest.
 
-⚠️ Building arm64 on an amd64 runner via QEMU is 3-5x slower than native. To build a
-single arch only, set `platforms` explicitly:
-
-```yaml
-  - uses: abxst/actions/with-scan@v1
-    with:
-      push: true
-      platforms: linux/amd64          # native-only, no emulation
-      registry-username: ${{ github.actor }}
-      registry-password: ${{ secrets.GITHUB_TOKEN }}
-```
+⚠️ Building arm64 on an amd64 runner via QEMU is 3-5x slower than native. Only enable
+it when you actually need it (e.g. deploying to Raspberry Pi, M-series Macs, AWS Graviton).
 
 ### 5.5. Trigger ArgoCD after push (GitOps pattern)
 
