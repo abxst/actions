@@ -58,9 +58,12 @@ inputs:
   semgrep-version:
     required: false
     default: 'latest'
-  sarif-upload:
+  report-artifact-name:
     required: false
-    default: 'true'
+    default: 'security-reports'
+  report-retention-days:
+    required: false
+    default: '90'
 
 outputs:
   image-tags:
@@ -69,14 +72,10 @@ outputs:
     value: ${{ steps.push.outputs.digest }}
   image-name-lc:
     value: ${{ steps.lc.outputs.name }}
-  sast-sarif:
+  sast-report:
     value: ${{ steps.reports.outputs.sast }}
-  sast-gate-report:
-    value: ${{ steps.reports.outputs.sast-gate }}
-  image-sarif:
+  image-report:
     value: ${{ steps.reports.outputs.image }}
-  image-gate-report:
-    value: ${{ steps.reports.outputs.image-gate }}
 
 runs:
   using: 'composite'
@@ -86,13 +85,11 @@ runs:
       shell: bash
       run: |
         {
-          echo "sast=$RUNNER_TEMP/semgrep.sarif"
-          echo "sast-gate=$RUNNER_TEMP/semgrep-gate.json"
-          echo "image=$RUNNER_TEMP/trivy.sarif"
-          echo "image-gate=$RUNNER_TEMP/trivy-gate.json"
+          echo "sast=$RUNNER_TEMP/semgrep-report.json"
+          echo "image=$RUNNER_TEMP/trivy-report.json"
         } >> "$GITHUB_OUTPUT"
 
-    - name: Semgrep SAST (full report)
+    - name: Semgrep SAST scan
       shell: bash
       env:
         SAST_CONFIG: ${{ inputs.sast-config }}
@@ -117,64 +114,32 @@ runs:
           -w /src "$SEMGREP_IMAGE" \
           semgrep scan "${args[@]}" \
             --metrics=off --disable-version-check \
-            --sarif --output "/out/$(basename "$OUT")" . || true
+            --json --output "/out/$(basename "$OUT")" . || true
 
-    - name: Upload Semgrep SARIF
-      if: always() && inputs.sarif-upload == 'true'
-      continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: ${{ steps.reports.outputs.sast }}
-        category: semgrep
-
-    - name: Semgrep SAST (hard gate)
+    - name: Semgrep gate
       shell: bash
       env:
-        SAST_CONFIG: ${{ inputs.sast-config }}
-        SAST_EXCLUDE: ${{ inputs.sast-exclude }}
-        SAST_GATE_SEVERITY: ${{ inputs.sast-gate-severity }}
-        SEMGREP_IMAGE: 'semgrep/semgrep:${{ inputs.semgrep-version }}'
-        OUT: ${{ steps.reports.outputs.sast-gate }}
-      run: |
-        set -euo pipefail
-        args=()
-        while IFS= read -r c; do
-          c="${c// /}"
-          if [ -n "$c" ]; then args+=(--config "$c"); fi
-        done <<< "${SAST_CONFIG//,/$'\n'}"
-        while IFS= read -r e; do
-          if [ -n "$e" ]; then args+=(--exclude "$e"); fi
-        done <<< "${SAST_EXCLUDE//,/$'\n'}"
-        while IFS= read -r s; do
-          s="${s// /}"
-          if [ -n "$s" ]; then args+=(--severity "$s"); fi
-        done <<< "${SAST_GATE_SEVERITY//,/$'\n'}"
-        docker run --rm \
-          --user "$(id -u):$(id -g)" \
-          -e HOME=/tmp \
-          -v "$GITHUB_WORKSPACE:/src" \
-          -v "$RUNNER_TEMP:/out" \
-          -w /src "$SEMGREP_IMAGE" \
-          semgrep scan "${args[@]}" \
-            --metrics=off --disable-version-check \
-            --json --output "/out/$(basename "$OUT")" --error .
-
-    - name: Semgrep gate summary
-      if: always()
-      shell: bash
-      env:
-        OUT: ${{ steps.reports.outputs.sast-gate }}
+        OUT: ${{ steps.reports.outputs.sast }}
+        GATE_SEVERITY: ${{ inputs.sast-gate-severity }}
       run: |
         set -euo pipefail
         if [ ! -f "$OUT" ]; then
-          echo "No Semgrep gate report at $OUT (scan did not complete)."
-          exit 0
+          echo "::error::Semgrep produced no report at $OUT - the scan did not complete."
+          exit 1
         fi
-        jq -r '
-          "Semgrep gate: \(.results | length) blocking finding(s)",
-          (.results | group_by(.extra.severity)[] | "  \(.[0].extra.severity): \(length)"),
-          (.results[] | "  [\(.extra.severity)] \(.check_id)\n      \(.path):\(.start.line)")
-        ' "$OUT"
+        sev=$(jq -cn --arg s "$GATE_SEVERITY" \
+          '$s | split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length > 0))')
+        blocking=$(jq -c --argjson sev "$sev" \
+          '[.results[] | select(.extra.severity as $s | $sev | index($s))]' "$OUT")
+        total=$(jq '.results | length' "$OUT")
+        count=$(jq 'length' <<< "$blocking")
+        echo "Semgrep: $total finding(s) total, $count blocking (gate: $GATE_SEVERITY)"
+        jq -r 'group_by(.extra.severity)[] | "  \(.[0].extra.severity): \(length)"' <<< "$blocking"
+        jq -r '.[] | "  [\(.extra.severity)] \(.check_id)\n      \(.path):\(.start.line)"' <<< "$blocking"
+        if [ "$count" -gt 0 ]; then
+          echo "::error::Semgrep gate failed: $count blocking finding(s)."
+          exit 1
+        fi
 
     - name: Lowercase image name
       id: lc
@@ -216,11 +181,11 @@ runs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Trivy scan (full report)
+    - name: Trivy image scan
       uses: aquasecurity/trivy-action@master
       with:
         image-ref: ${{ steps.lc.outputs.name }}:scan
-        format: sarif
+        format: json
         output: ${{ steps.reports.outputs.image }}
         cache-dir: ${{ runner.temp }}/trivy-cache
         exit-code: '0'
@@ -228,43 +193,45 @@ runs:
         vuln-type: os,library
         severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
 
-    - name: Upload Trivy SARIF
-      if: always() && inputs.sarif-upload == 'true'
-      continue-on-error: true
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: ${{ steps.reports.outputs.image }}
-        category: trivy
-
-    - name: Trivy scan (hard gate)
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ steps.lc.outputs.name }}:scan
-        format: json
-        output: ${{ steps.reports.outputs.image-gate }}
-        cache-dir: ${{ runner.temp }}/trivy-cache
-        exit-code: '1'
-        ignore-unfixed: ${{ inputs.gate-ignore-unfixed }}
-        vuln-type: os,library
-        severity: ${{ inputs.gate-severity }}
-
-    - name: Trivy gate summary
-      if: always()
+    - name: Trivy gate
       shell: bash
       env:
-        OUT: ${{ steps.reports.outputs.image-gate }}
+        OUT: ${{ steps.reports.outputs.image }}
+        GATE_SEVERITY: ${{ inputs.gate-severity }}
+        IGNORE_UNFIXED: ${{ inputs.gate-ignore-unfixed }}
       run: |
         set -euo pipefail
         if [ ! -f "$OUT" ]; then
-          echo "No Trivy gate report at $OUT (scan did not complete)."
-          exit 0
+          echo "::error::Trivy produced no report at $OUT - the scan did not complete."
+          exit 1
         fi
-        jq -r '
-          ([.Results[]?.Vulnerabilities[]?]) as $v
-          | "Trivy gate: \($v | length) blocking vulnerability(ies)",
-            ($v | group_by(.Severity)[] | "  \(.[0].Severity): \(length)"),
-            ($v[] | "  [\(.Severity)] \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "no fix")")
-        ' "$OUT"
+        sev=$(jq -cn --arg s "$GATE_SEVERITY" \
+          '$s | split(",") | map(gsub("^\\s+|\\s+$";"")) | map(select(length > 0))')
+        blocking=$(jq -c --argjson sev "$sev" --arg unfixed "$IGNORE_UNFIXED" '
+          [ .Results[]?.Vulnerabilities[]?
+            | select(.Severity as $s | $sev | index($s))
+            | select($unfixed != "true" or ((.FixedVersion // "") != ""))
+          ]' "$OUT")
+        total=$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$OUT")
+        count=$(jq 'length' <<< "$blocking")
+        echo "Trivy: $total vulnerability(ies) total, $count blocking (gate: $GATE_SEVERITY, ignore-unfixed: $IGNORE_UNFIXED)"
+        jq -r 'group_by(.Severity)[] | "  \(.[0].Severity): \(length)"' <<< "$blocking"
+        jq -r '.[] | "  [\(.Severity)] \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(if (.FixedVersion // "") == "" then "no fix" else .FixedVersion end)"' <<< "$blocking"
+        if [ "$count" -gt 0 ]; then
+          echo "::error::Trivy gate failed: $count blocking vulnerability(ies)."
+          exit 1
+        fi
+
+    - name: Upload security reports
+      if: always() && inputs.report-artifact-name != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.report-artifact-name }}
+        path: |
+          ${{ steps.reports.outputs.sast }}
+          ${{ steps.reports.outputs.image }}
+        if-no-files-found: ignore
+        retention-days: ${{ inputs.report-retention-days }}
 
     - name: Push
       id: push
