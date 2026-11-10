@@ -1,5 +1,5 @@
 name: 'Docker Publish (with Semgrep + Trivy scan)'
-description: 'SAST - Build - Scan - Push Docker image'
+description: 'SAST - Build - Scan - Publish scanned amd64 Docker image'
 author: 'abxst (Nguyen Hai)'
 
 branding:
@@ -34,12 +34,6 @@ inputs:
   build-args:
     required: false
     default: ''
-  platforms:
-    required: false
-    default: 'linux/amd64'
-  scan-platform:
-    required: false
-    default: 'linux/amd64'
   gate-severity:
     required: false
     default: 'HIGH,CRITICAL'
@@ -148,13 +142,11 @@ runs:
         RAW_NAME: ${{ inputs.image-name }}
       run: echo "name=${RAW_NAME,,}" >> "$GITHUB_OUTPUT"
 
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
     - name: Login to registry
+      if: inputs.push == 'true'
       uses: docker/login-action@v3
       with:
         registry: ${{ inputs.registry }}
@@ -168,23 +160,37 @@ runs:
         images: ${{ inputs.registry }}/${{ steps.lc.outputs.name }}
         tags: ${{ inputs.tags }}
 
-    - name: Build (local for scan)
-      uses: docker/build-push-action@v5
+    - name: Build image once (linux/amd64)
+      uses: docker/build-push-action@v6
       with:
         context: ${{ inputs.context }}
         file: ${{ inputs.dockerfile }}
+        platforms: linux/amd64
         load: true
-        tags: ${{ steps.lc.outputs.name }}:scan
+        push: false
+        tags: ${{ inputs.registry }}/${{ steps.lc.outputs.name }}:scan
         labels: ${{ steps.meta.outputs.labels }}
         build-args: ${{ inputs.build-args }}
-        platforms: ${{ inputs.scan-platform }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Validate image architecture
+      shell: bash
+      env:
+        SOURCE_IMAGE: ${{ inputs.registry }}/${{ steps.lc.outputs.name }}:scan
+      run: |
+        set -euo pipefail
+        actual=$(docker image inspect "$SOURCE_IMAGE" --format '{{.Os}}/{{.Architecture}}')
+        if [[ "$actual" != 'linux/amd64' ]]; then
+          echo "::error::Expected linux/amd64 but got $actual"
+          exit 1
+        fi
+        echo "Validated $SOURCE_IMAGE ($actual)"
 
     - name: Trivy image scan
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ steps.lc.outputs.name }}:scan
+        image-ref: ${{ inputs.registry }}/${{ steps.lc.outputs.name }}:scan
         format: json
         output: ${{ steps.reports.outputs.image }}
         cache-dir: ${{ runner.temp }}/trivy-cache
@@ -233,17 +239,50 @@ runs:
         if-no-files-found: ignore
         retention-days: ${{ inputs.report-retention-days }}
 
-    - name: Push
+    - name: Publish scanned image (no rebuild)
       id: push
       if: inputs.push == 'true'
-      uses: docker/build-push-action@v5
-      with:
-        context: ${{ inputs.context }}
-        file: ${{ inputs.dockerfile }}
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        build-args: ${{ inputs.build-args }}
-        platforms: ${{ inputs.platforms }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      shell: bash
+      env:
+        SOURCE_IMAGE: ${{ inputs.registry }}/${{ steps.lc.outputs.name }}:scan
+        IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+      run: |
+        set -euo pipefail
+        source_id=$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')
+        first_digest=''
+        pushed=0
+
+        while IFS= read -r target; do
+          [[ -z "$target" ]] && continue
+          docker tag "$SOURCE_IMAGE" "$target"
+          target_id=$(docker image inspect "$target" --format '{{.Id}}')
+          if [[ "$source_id" != "$target_id" ]]; then
+            echo "::error::Image ID changed during tagging: $target"
+            exit 1
+          fi
+
+          log_file=$(mktemp)
+          if ! docker push "$target" 2>&1 | tee "$log_file"; then
+            rm -f "$log_file"
+            exit 1
+          fi
+          digest=$(sed -n 's/.*digest: \(sha256:[a-f0-9]*\).*/\1/p' "$log_file" | tail -n 1)
+          rm -f "$log_file"
+          if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Could not determine pushed digest for $target"
+            exit 1
+          fi
+          if [[ -z "$first_digest" ]]; then
+            first_digest="$digest"
+          elif [[ "$digest" != "$first_digest" ]]; then
+            echo "::error::Published tags have different digests"
+            exit 1
+          fi
+          pushed=$((pushed + 1))
+        done <<< "$IMAGE_TAGS"
+
+        if [[ "$pushed" -eq 0 ]]; then
+          echo "::error::No image tags were generated for publication"
+          exit 1
+        fi
+        echo "digest=$first_digest" >> "$GITHUB_OUTPUT"
